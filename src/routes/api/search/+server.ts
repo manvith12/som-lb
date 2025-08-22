@@ -18,7 +18,7 @@ export async function GET({ url }) {
 
   let users = data.users.sort((a, b) => b.shells - a.shells);
   let searchData = users.filter((user) =>
-    user.username.toLowerCase().includes(search.toLowerCase()),
+    user.username.toLowerCase().includes(search.toLowerCase()) || user.slack_id == search,
   );
 
   let pages = Math.ceil(searchData.length / 10);
