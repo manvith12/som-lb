@@ -1,31 +1,21 @@
-import fetchData from "$lib/data.server.js";
+import { getLeaderboard } from "$lib/data.server.js";
+import { json } from '@sveltejs/kit';
 
 export async function GET({ url }) {
   const searchParams = url.searchParams;
   const page = parseInt(searchParams.get("page") || "1");
-  const byNetWorth = searchParams.get("byNetWorth") === "true";
 
-  let data = await fetchData();
+  try {
+    const data = await getLeaderboard(page, 10);
 
-  let pages = Math.ceil(data.users.length / 10);
-
-  let users;
-
-  if (byNetWorth) {
-    users = data.users.map(user => ({
-      ...user,
-      total_shells: user.shells + user.payouts.reduce((acc, payout) => acc + (payout.type == "ShopOrder" ? payout.amount * -1 : 0), 0)
-    })).sort((a, b) => b.total_shells - a.total_shells);
-  } else {
-    users = data.users.sort((a, b) => b.shells - a.shells);
+    return json({
+      users: data.members,
+      pages: data.pages,
+      timestamp: data.timestamp,
+      optedIn: data.total,
+    });
+  } catch (error) {
+    console.error('Error in leaderboard endpoint:', error);
+    return json({ error: 'Failed to fetch leaderboard' }, { status: 500 });
   }
-
-  users = users.slice((page - 1) * 10, page * 10);
-
-  return Response.json({
-    users,
-    pages,
-    timestamp: data.timestamp,
-    optedIn: data.users.length,
-  });
 }

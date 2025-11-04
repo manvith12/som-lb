@@ -1,168 +1,199 @@
-import fs from "fs";
-import { WebClient } from "@slack/web-api";
-import PQueue from "p-queue";
+import { createClient } from '@supabase/supabase-js';
+import { SUPABASE_URL, SUPABASE_SERVICE_KEY } from '$env/static/private';
 
-import { SLACK_TOKEN } from "$env/static/private";
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-const slack = new WebClient(SLACK_TOKEN);
+export interface Member {
+	id: number;
+	name: string;
+	reputation: number;
+	avatar_url: string | null;
+	github_username: string | null;
+	created_at: string;
+	updated_at: string;
+}
 
-// slack ratelimit of around 100/min
-const userInfoQueue = new PQueue({
-  intervalCap: 100,
-  interval: 60_000,
-  carryoverConcurrencyCount: true,
-});
+export interface ReputationHistory {
+	id: number;
+	member_id: number;
+	points: number;
+	reason: string;
+	category: string;
+	created_at: string;
+}
 
-let userCache: {
-  users: Record<string, { username: string; image: string }>;
-  timestamp: number;
-};
+export interface LeaderboardResponse {
+	members: Member[];
+	pages: number;
+	total: number;
+	timestamp: number;
+}
 
 let cache: {
-  users: any[];
-  timestamp: number;
-};
+	data: LeaderboardResponse | null;
+	timestamp: number;
+} = { data: null, timestamp: 0 };
 
-try {
-  cache = JSON.parse(fs.readFileSync("cache.json", "utf-8"));
-} catch (e) {
-  cache = { users: [], timestamp: 0 };
+export async function getLeaderboard(page: number = 1, pageSize: number = 10): Promise<LeaderboardResponse> {
+	// 5 min cache for page 1
+	if (page === 1 && cache.data && cache.timestamp > Date.now() - 1000 * 60 * 5) {
+		console.log('cache hit');
+		return cache.data;
+	}
+
+	const offset = (page - 1) * pageSize;
+
+	// Get total count
+	const { count } = await supabase
+		.from('members')
+		.select('*', { count: 'exact', head: true });
+
+	// Get paginated members
+	const { data: members, error } = await supabase
+		.from('members')
+		.select('*')
+		.order('reputation', { ascending: false })
+		.range(offset, offset + pageSize - 1);
+
+	if (error) {
+		console.error('Error fetching leaderboard:', error);
+		if (cache.data) {
+			console.log('Using cached data due to error');
+			return cache.data;
+		}
+		throw error;
+	}
+
+	const response = {
+		members: members || [],
+		pages: Math.ceil((count || 0) / pageSize),
+		total: count || 0,
+		timestamp: Date.now()
+	};
+
+	if (page === 1) {
+		cache = { data: response, timestamp: Date.now() };
+	}
+
+	return response;
 }
 
-try {
-  userCache = JSON.parse(fs.readFileSync("userCache.json", "utf-8"));
-} catch (e) {
-  userCache = { users: {}, timestamp: 0 };
+export async function searchMembers(query: string, page: number = 1, pageSize: number = 10): Promise<LeaderboardResponse> {
+	const offset = (page - 1) * pageSize;
+
+	// Search by name
+	const { data: members, error, count } = await supabase
+		.from('members')
+		.select('*', { count: 'exact' })
+		.ilike('name', `%${query}%`)
+		.order('reputation', { ascending: false })
+		.range(offset, offset + pageSize - 1);
+
+	if (error) {
+		console.error('Error searching members:', error);
+		throw error;
+	}
+
+	return {
+		members: members || [],
+		pages: Math.ceil((count || 0) / pageSize),
+		total: count || 0,
+		timestamp: Date.now()
+	};
 }
 
-export default async function fetchData() {
-  // 5 min cache
-  if (cache.timestamp > Date.now() - 1000 * 60 * 5) {
-    console.log("cache hit");
-    return cache;
-  }
+export async function getMemberHistory(memberId: number): Promise<ReputationHistory[]> {
+	const { data, error } = await supabase
+		.from('reputation_history')
+		.select('*')
+		.eq('member_id', memberId)
+		.order('created_at', { ascending: false });
 
-  let doRefreshUserCache = false;
+	if (error) {
+		console.error('Error fetching member history:', error);
+		throw error;
+	}
 
-  // 6hr cache
-  if (userCache.timestamp < Date.now() - 1000 * 60 * 60 * 6) {
-    console.log("user cache expired");
-    doRefreshUserCache = true;
-  }
-
-  console.log("cache miss");
-
-  let users;
-
-  try {
-    const res = await fetch("https://explorpheus.hackclub.com/leaderboard");
-
-    if (!res.ok) {
-      if (cache.users.length > 0) {
-        console.error("Using cached data due to API failure");
-        return cache;
-      }
-
-      throw new Error("Failed to fetch data from API, and cache is empty");
-    }
-
-    users = await res.json();
-    console.log(`fetched ${users.length} users from explorpheus`);
-  } catch (error) {
-    console.error("Error fetching data:", error);
-
-    if (cache.users.length > 0) {
-      console.error("Using cached data due to API failure");
-      return cache;
-    }
-
-    throw new Error("Failed to fetch data from API, and cache is empty");
-  }
-
-  users = await Promise.all(
-    users.map(async (user) => {
-      if (!user.slack_id) {
-        return { ...user, username: "<unknown>", image: "https://ca.slack-edge.com/T0266FRGM-U015ZPLDZKQ-gf3696467c28-512" };
-      }
-
-      const userData = await fetchUserData(user.slack_id);
-
-      return {
-        ...user,
-        username: userData.username || user.slack_id,
-        image: userData.image,
-      };
-    }),
-  );
-
-  const data = {
-    users,
-    timestamp: Date.now(),
-  };
-
-  cache = data;
-  fs.writeFileSync("cache.json", JSON.stringify(data, null, 2));
-
-  userCache.timestamp = Date.now();
-  fs.writeFileSync("userCache.json", JSON.stringify(userCache, null, 2));
-
-  if (doRefreshUserCache) {
-    // put it here so the fetch requests arent before the required ones for this request in queue
-    // also not await so it returns immediately
-    refreshUserCache().catch(console.error);
-  }
-
-  return data;
+	return data || [];
 }
 
-async function fetchUserData(slackId, useCache = true) {
-  const cachedUser = userCache.users[slackId];
+export async function getMemberByName(name: string): Promise<Member | null> {
+	const { data, error } = await supabase
+		.from('members')
+		.select('*')
+		.eq('name', name)
+		.single();
 
-  if (cachedUser && useCache) {
-    return cachedUser;
-  } else if (useCache) {
-    console.log(`cache miss for user ${slackId}`); // only log cache miss if using cache
-  }
+	if (error) {
+		if (error.code === 'PGRST116') {
+			return null; // Not found
+		}
+		console.error('Error fetching member:', error);
+		throw error;
+	}
 
-  const res = await userInfoQueue.add(() =>
-    slack.users.info({ user: slackId }),
-  );
-
-  const data = {
-    username:
-      res.user?.profile?.display_name_normalized || res.user?.name || slackId,
-    image:
-      res.user?.profile?.image_192 ||
-      `https://cachet.dunkirk.sh/users/${slackId}/r`,
-  };
-
-  userCache.users[slackId] = data;
-  return data;
+	return data;
 }
 
-export async function refreshUserCache() {
-  console.log("refreshing user cache...");
-  console.time("refeshUserCache");
+export async function addReputation(
+	name: string,
+	points: number,
+	reason: string,
+	category: string
+): Promise<{ success: boolean; message: string; new_reputation: number }> {
+	const { data, error } = await supabase.rpc('add_reputation', {
+		p_name: name,
+		p_points: points,
+		p_reason: reason,
+		p_category: category
+	});
 
-  cache.users = await Promise.all(
-    cache.users.map(async (user) => {
-      if (!user.slack_id) {
-        return { ...user, username: "<unknown>", image: "https://ca.slack-edge.com/T0266FRGM-U015ZPLDZKQ-gf3696467c28-512" };
-      }
+	if (error) {
+		console.error('Error adding reputation:', error);
+		throw error;
+	}
 
-      const userData = await fetchUserData(user.slack_id, false);
+	return data[0];
+}
 
-      return {
-        ...user,
-        username: userData.username || user.slack_id,
-        image: userData.image,
-      };
-    }),
-  );
+export async function createMember(
+	name: string,
+	githubUsername?: string,
+	avatarUrl?: string
+): Promise<Member> {
+	const { data, error } = await supabase
+		.from('members')
+		.insert({
+			name,
+			github_username: githubUsername,
+			avatar_url: avatarUrl
+		})
+		.select()
+		.single();
 
-  userCache.timestamp = Date.now();
-  fs.writeFileSync("userCache.json", JSON.stringify(userCache, null, 2));
-  
-  console.timeEnd("refeshUserCache");
-  console.log("user cache refreshed");
+	if (error) {
+		console.error('Error creating member:', error);
+		throw error;
+	}
+
+	return data;
+}
+
+export async function updateMember(
+	id: number,
+	updates: Partial<Omit<Member, 'id' | 'created_at' | 'updated_at'>>
+): Promise<Member> {
+	const { data, error } = await supabase
+		.from('members')
+		.update(updates)
+		.eq('id', id)
+		.select()
+		.single();
+
+	if (error) {
+		console.error('Error updating member:', error);
+		throw error;
+	}
+
+	return data;
 }

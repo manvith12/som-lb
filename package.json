@@ -9,10 +9,15 @@
     "preview": "vite preview",
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "add-rep": "node scripts/add-reputation.js",
+    "create-member": "node scripts/create-member.js",
+    "deploy": "vercel --prod",
+    "deploy:preview": "vercel"
   },
   "devDependencies": {
     "@sveltejs/adapter-auto": "^6.0.0",
+    "@sveltejs/adapter-vercel": "^6.1.1",
     "@sveltejs/kit": "^2.16.0",
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@tailwindcss/vite": "^4.0.0",
@@ -24,7 +29,9 @@
   },
   "dependencies": {
     "@slack/web-api": "^7.9.3",
+    "@supabase/supabase-js": "^2.78.0",
     "@sveltejs/adapter-node": "^5.2.12",
+    "dotenv": "^16.4.7",
     "lightweight-charts": "^5.0.8",
     "p-queue": "^8.1.0"
   }

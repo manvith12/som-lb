@@ -1,12 +1,14 @@
-import fetchData from "$lib/data.server.js";
+import { searchMembers, getLeaderboard } from "$lib/data.server.js";
+import { json } from '@sveltejs/kit';
+import type { RequestHandler } from './$types';
 
-export async function GET({ url }) {
-  const searchParams = url.searchParams;
+export const GET: RequestHandler = async ({ url }) => {
+  const { searchParams } = url;
   const page = parseInt(searchParams.get("page") || "1");
   const search = searchParams.get("search") || "";
 
   if (!search) {
-    return Response.json(
+    return json(
       {
         error: "Search query is required",
       },
@@ -14,38 +16,37 @@ export async function GET({ url }) {
     );
   }
 
-  let data = await fetchData();
+  try {
+    const data = await searchMembers(search, page, 10);
 
-  let users = data.users.sort((a, b) => b.shells - a.shells);
-  let searchData = users.filter((user) =>
-    user.username.toLowerCase().includes(search.toLowerCase()) || user.slack_id == search,
-  );
+    if (data.members.length === 0) {
+      return json(
+        {
+          error: "No members found",
+          users: [],
+          pages: 0,
+          timestamp: data.timestamp,
+          optedIn: 0,
+        },
+        { status: 404 },
+      );
+    }
 
-  let pages = Math.ceil(searchData.length / 10);
+    // Get full leaderboard to calculate ranks
+    const fullData = await getLeaderboard(1, 1000);
+    const rankedMembers = data.members.map((member) => ({
+      ...member,
+      rank: fullData.members.findIndex((m) => m.id === member.id) + 1,
+    }));
 
-  if (searchData.length === 0) {
-    return Response.json(
-      {
-        error: "No users found",
-        pages,
-        timestamp: data.timestamp,
-        optedIn: data.users.length,
-      },
-      { status: 404 },
-    );
+    return json({
+      users: rankedMembers,
+      pages: data.pages,
+      timestamp: data.timestamp,
+      optedIn: data.total,
+    });
+  } catch (error) {
+    console.error('Error in search endpoint:', error);
+    return json({ error: 'Failed to search members' }, { status: 500 });
   }
-
-  searchData = searchData.slice((page - 1) * 10, page * 10);
-
-  searchData = searchData.map((user) => ({
-    ...user,
-    rank: users.findIndex((u) => u.slack_id === user.slack_id) + 1,
-  }));
-
-  return Response.json({
-    users: searchData,
-    pages,
-    timestamp: data.timestamp,
-    optedIn: data.users.length,
-  });
-}
+};

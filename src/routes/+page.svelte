@@ -1,21 +1,21 @@
 <script lang="ts">
     import { browser } from "$app/environment";
-    import { AreaSeries, createChart, type DeepPartial, type TimeChartOptions } from "lightweight-charts";
-    import { onMount, tick } from "svelte";
+    import { onMount } from "svelte";
 
     let data: {
         users: {
-            slack_id: string;
-            username: string;
-            payouts: {
-                amount: string;
+            id: number;
+            name: string;
+            reputation: number;
+            avatar_url: string | null;
+            github_username: string | null;
+            history?: {
+                points: number;
+                reason: string;
+                category: string;
                 created_at: string;
-                id: string;
-                type: string;
             }[];
-            shells: number;
-            total_shells?: number;
-            image: string;
+            rank?: number;
         }[];
         pages?: number;
         timestamp?: number;
@@ -28,19 +28,19 @@
 
     let hadSearchParam: boolean = false;
     let search: string = "";
-    let byNetWorth: boolean = false;
 
     let popupData: {
-        slack_id: string;
-        username: string;
-        payouts: {
-            amount: string;
+        id: number;
+        name: string;
+        reputation: number;
+        avatar_url: string | null;
+        github_username: string | null;
+        history?: {
+            points: number;
+            reason: string;
+            category: string;
             created_at: string;
-            id: string;
-            type: string;
         }[];
-        shells: number;
-        total_shells?: number;
     } | null = null;
 
     let loading: boolean = true;
@@ -58,7 +58,6 @@
             }
 
             search = urlParams.get("search") || "";
-            byNetWorth = urlParams.get("byNetWorth") === "true";
 
             if (search.trim()) {
                 hadSearchParam = true;
@@ -70,7 +69,7 @@
 
     async function fetchData() {
         try {
-            let url = `/api/lb?page=${page}&byNetWorth=${byNetWorth}`;
+            let url = `/api/lb?page=${page}`;
 
             if (search.trim()) {
                 url = `/api/search?search=${encodeURIComponent(search)}&page=${page}`;
@@ -93,6 +92,18 @@
             console.error("Error fetching leaderboard data:", error);
             alert("An error occurred while fetching leaderboard data. Please try again later.");
         }
+    }
+
+    async function fetchMemberHistory(memberId: number) {
+        try {
+            const response = await fetch(`/api/member/${memberId}/history`);
+            if (response.ok) {
+                return await response.json();
+            }
+        } catch (error) {
+            console.error("Error fetching member history:", error);
+        }
+        return [];
     }
 
     let currentTime: number = new Date().getTime();
@@ -128,11 +139,11 @@
     </div>
 {:else}
     <div class="flex flex-col items-center px-2">
-        <h1 class="text-4xl md:text-6xl mt-16 brown">Shell Leaderboard</h1>
+        <h1 class="text-4xl md:text-6xl mt-16 brown">Reputation Leaderboard</h1>
         <div class="flex md:text-lg">
             <a href="https://github.com/cyteon/som-lb" class="opacity-70 font-bold!">Source</a>
             <p class="brown opacity-40 mx-1">|</p>
-            <a href="https://summer.hackclub.com" class="opacity-70 font-bold!">Summer of Making</a>
+            <a href="/rubric" class="opacity-70 font-bold!">View Rubric</a>
             <p class="brown opacity-40 mx-1">|</p>
             <p class="opacity-70 font-bold!">By <a href="https://cyteon.dev?utm_source=som-lb" class="font-bold!">Cyteon</a></p>
         </div>
@@ -141,7 +152,7 @@
                 <p class="opacity-70">
                     <span class="font-bold!">
                         {data.optedIn || 0}
-                    </span> people found
+                    </span> members found
                 </p>
                 <p class="brown opacity-40 mx-1">|</p>
                 <p class="opacity-70">
@@ -162,7 +173,7 @@
         <div class="mt-8 bg border rounded-md p-2 flex">
             <input 
                 type="text" 
-                placeholder="Search for a user..." 
+                placeholder="Search for a member..." 
                 class="px-2 py-1 border rounded-md w-full focus:outline-none"
                 bind:value={search}
             />
@@ -183,27 +194,6 @@
             </button>
         </div>
 
-        <div class="mt-2 bg border rounded-md p-2 flex space-x-2">
-            <button 
-                class={`px-4 py-1 rounded-md ${byNetWorth ? "border" : "bg-blue-400"}`}
-                on:click={async () => {
-                    byNetWorth = false;
-
-                    await fetchData();
-                    window.history.pushState({}, "", `?page=${page}&byNetWorth=${byNetWorth}&search=${encodeURIComponent(search)}`);
-                }}
-            >By Current Shells</button>
-            <button 
-                class={`px-4 py-1 rounded-md ${!byNetWorth ? "border" : "bg-blue-400"}`}
-                on:click={async () => {
-                    byNetWorth = true;
-
-                    await fetchData();
-                    window.history.pushState({}, "", `?page=${page}&byNetWorth=${byNetWorth}&search=${encodeURIComponent(search)}`);
-                }}
-            >By Net Worth</button>
-        </div>
-
         <div
             class="w-full md:w-1/2 mt-4 space-y-2" 
         >
@@ -217,71 +207,26 @@
                                 user.rank : 
                                 index + 1 + (page - 1) * 10   
                         }</p>
-                        <img src={user.image} alt={user.username} class="my-auto size-12 md:size-16 rounded-md" />
+                        {#if user.avatar_url}
+                            <img src={user.avatar_url} alt={user.name} class="my-auto size-12 md:size-16 rounded-md" />
+                        {:else}
+                            <div class="my-auto size-12 md:size-16 rounded-md bg-blue-400 flex items-center justify-center text-white text-2xl font-bold">
+                                {user.name.charAt(0).toUpperCase()}
+                            </div>
+                        {/if}
                         <button class="text-2xl my-auto ml-4 truncate max-w-2/5 hover:underline" on:click={async () => { 
-                            popupData = user;
-
-                            let currentShells = 0;
-
-                            await tick();
-
-                            let chartData = [
-                                {
-                                    value: 0, // everyone started with 0 soooo
-                                    time: 1750053180 // 16th june 2025, 7:53am: SoM launch
-                                }, 
-                                ...user.payouts.map((p) => {
-                                    currentShells += parseFloat(p.amount);
-
-                                    return {
-                                        value: currentShells,
-                                        time: new Date(p.created_at).getTime() / 1000,
-                                    }
-                                })
-                            ]
-
-                            chartData.sort((a, b) => a.time - b.time);
-
-                            const chartOptions: DeepPartial<TimeChartOptions> = { 
-                                layout: { 
-                                    textColor: "black", 
-                                    background: { 
-                                        color: "transparent" 
-                                    },
-                                    attributionLogo: false,
-                                },
-                                grid: {
-                                    horzLines: {
-                                        color: "#7c4a3320"
-                                    },
-                                    vertLines: {
-                                        color: "#7c4a3320",
-                                    }
-                                },
-                                timeScale: {
-                                    timeVisible: true,
-                                    borderColor: "#7c4a33",
-                                },
-                                rightPriceScale: {
-                                    borderColor: "#7c4a33",
-                                },
-                            };
-
-                            const chart = createChart(document.getElementById("chart")!, chartOptions);
-                            const areaSeries = chart.addSeries(AreaSeries, { lineColor: "#2962FF", topColor: "#2962FF", bottomColor: "rgba(41, 98, 255, 0.28)" });
-                        
-                            areaSeries.setData(chartData);
-                            chart.timeScale().fitContent();
-                        }}>{user.username}</button>
+                            const history = await fetchMemberHistory(user.id);
+                            popupData = { ...user, history };
+                        }}>{user.name}</button>
 
                         <div class="ml-auto my-auto flex">
-                            <p class="text-2xl text-right">{byNetWorth ? user.total_shells?.toFixed(0) : user.shells.toFixed(0)}</p>
-                            <img src="/shell.png" alt="shell" class="inline my-1.5 w-6 h-6 ml-2" />
+                            <p class="text-2xl text-right font-bold text-blue-600">{user.reputation}</p>
+                            <span class="ml-2 text-xl my-auto opacity-70">pts</span>
                         </div>
                     </div>
                 {/each}
             {:else}
-                <p class="text-lg text-center my-4">No users found.</p>
+                <p class="text-lg text-center my-4">No members found.</p>
             {/if}
         </div>
 
@@ -322,50 +267,59 @@
 {#if popupData}
     <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-2">
         <div class="flex flex-col p-2 px-4 border rounded-md bg w-full md:w-1/2 max-h-3/4">
-            <h1 class="text-3xl flex">
-                {popupData.username} <button class="ml-auto text-3xl" on:click={() => { popupData = null }}>&times;</button>
+            <h1 class="text-3xl flex items-center">
+                {#if popupData.avatar_url}
+                    <img src={popupData.avatar_url} alt={popupData.name} class="size-12 rounded-md mr-3" />
+                {:else}
+                    <div class="size-12 rounded-md bg-blue-400 flex items-center justify-center text-white text-xl font-bold mr-3">
+                        {popupData.name.charAt(0).toUpperCase()}
+                    </div>
+                {/if}
+                {popupData.name} 
+                <button class="ml-auto text-3xl" on:click={() => { popupData = null }}>&times;</button>
             </h1>
-            <p class="text-lg">Shells: {popupData.shells.toFixed(0)}</p>
+            <p class="text-lg">Reputation: <span class="font-bold text-blue-600">{popupData.reputation} points</span></p>
+            {#if popupData.github_username}
+                <p class="text-lg">
+                    GitHub: <a href="https://github.com/{popupData.github_username}" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">
+                        @{popupData.github_username}
+                    </a>
+                </p>
+            {/if}
 
-            <h2 class="text-2xl mt-4">Transactions:</h2>
+            <h2 class="text-2xl mt-4">Reputation History:</h2>
 
             <div class="border rounded-sm mt-2 max-h-96 overflow-y-auto">
-                <table class="w-full">
-                    <thead>
-                        <tr>
-                            <th class="text-left py-1 px-2 border-r">Amount</th>
-                            <th class="text-left py-1 px-2 border-r">Type</th>
-                            <th class="text-left py-1 px-2">Time</th>
-                        </tr>
-                    </thead>
-                    <tbody class="md:text-lg">
-                        {#each popupData.payouts as payout}
+                {#if popupData.history && popupData.history.length > 0}
+                    <table class="w-full">
+                        <thead>
                             <tr>
-                                <td class={"px-2 border-r border-t " + (parseFloat(payout.amount) > 0 ? "text-green-700" : "text-red-700")}>
-                                    {parseFloat(payout.amount) > 0 ? "+" : ""}{payout.amount}
-                                </td>
-                                <td class="border border-b-0 px-2">
-                                    {#if payout.type === "User"}
-                                        User Modified
-                                    {:else if payout.type === "ShopOrder"}
-                                        {#if parseFloat(payout.amount) < 0}
-                                            Shop Order
-                                        {:else}
-                                            Shop Refund
-                                        {/if}
-                                    {:else}
-                                        {payout.type}
-                                    {/if}
-                                </td>
-                                <td class="border border-b-0 border-r-0 px-2">{generateTimeString(new Date(payout.created_at).getTime())}</td>
+                                <th class="text-left py-1 px-2 border-r">Points</th>
+                                <th class="text-left py-1 px-2 border-r">Category</th>
+                                <th class="text-left py-1 px-2 border-r">Reason</th>
+                                <th class="text-left py-1 px-2">Time</th>
                             </tr>
-                        {/each}
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="w-full h-64 mt-4 mb-2 border px-2 pt-2 rounded-sm">
-                <div id="chart" class="w-full h-full"></div>
+                        </thead>
+                        <tbody class="md:text-lg">
+                            {#each popupData.history as entry}
+                                <tr>
+                                    <td class={"px-2 border-r border-t font-bold " + (entry.points > 0 ? "text-green-700" : "text-red-700")}>
+                                        {entry.points > 0 ? "+" : ""}{entry.points}
+                                    </td>
+                                    <td class="border border-b-0 px-2">
+                                        {entry.category}
+                                    </td>
+                                    <td class="border border-b-0 px-2">
+                                        {entry.reason}
+                                    </td>
+                                    <td class="border border-b-0 border-r-0 px-2">{generateTimeString(new Date(entry.created_at).getTime())}</td>
+                                </tr>
+                            {/each}
+                        </tbody>
+                    </table>
+                {:else}
+                    <p class="text-center py-4 opacity-70">No reputation history yet.</p>
+                {/if}
             </div>
         </div>
     </div>
